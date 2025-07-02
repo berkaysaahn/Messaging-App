@@ -46,9 +46,12 @@ A modern messaging application providing secure, real-time communication with ad
    ```bash
    git clone https://github.com/yourusername/your-repo-name.git
    cd your-repo-name
+   ```
 
 2. **Install dependencies**
-npm install
+    ```bash
+    npm install
+    ```
 
 ## Run the application
 
@@ -56,7 +59,7 @@ npm install
    npm start
    ```
 
-- Open the file from a different terminal and type the following and run it
+Open the file from a different terminal and type the following and run it
 
    ```bash
    npx http-server -p 5000 --ssl --cert ./certs/localhost.crt --key ./certs/localhost.key 
