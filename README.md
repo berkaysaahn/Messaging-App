@@ -51,9 +51,10 @@ A modern messaging application providing secure, real-time communication with ad
 npm install
 
 ## Run the application
-    ```bash
-    npm start
 
-    ```bash
-    npx http-server -p 5000 --ssl --cert ./certs/localhost.crt --key ./certs/localhost.key 
+   ```bash
+   npm start
+
+   ```bash
+   npx http-server -p 5000 --ssl --cert ./certs/localhost.crt --key ./certs/localhost.key 
 
