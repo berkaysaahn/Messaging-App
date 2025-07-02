@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mesajlaşma Uygulaması - Giriş/Kayıt</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gray-100 flex items-center justify-center">
+  <div class="bg-white p-6 rounded shadow-md w-full max-w-md">
+    <h2 class="text-2xl font-bold mb-4 text-center">Mesajlaşma Uygulaması</h2>
+    
+    <!-- Kayıt Formu -->
+    <form id="register-form" class="mb-4">
+      <h3 class="text-lg font-semibold mb-2">Kayıt Ol</h3>
+      <input
+        type="text"
+        id="register-username"
+        class="w-full p-2 border rounded mb-2"
+        placeholder="Kullanıcı Adı"
+        required
+      />
+      <input
+        type="password"
+        id="register-password"
+        class="w-full p-2 border rounded mb-2"
+        placeholder="Şifre"
+        required
+      />
+      <button
+        type="submit"
+        class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+      >
+        Kayıt Ol
+      </button>
+    </form>
+
+    <!-- Giriş Formu -->
+    <form id="login-form">
+      <h3 class="text-lg font-semibold mb-2">Giriş Yap</h3>
+      <input
+        type="text"
+        id="login-username"
+        class="w-full p-2 border rounded mb-2"
+        placeholder="Kullanıcı Adı"
+        required
+      />
+      <input
+        type="password"
+        id="login-password"
+        class="w-full p-2 border rounded mb-2"
+        placeholder="Şifre"
+        required
+      />
+      <button
+        type="submit"
+        class="w-full bg-green-500 text-white p-2 rounded hover:bg-green-600"
+      >
+        Giriş Yap
+      </button>
+    </form>
+  </div>
+
+  <script>
+    // Kayıt Formu
+    document.getElementById('register-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('register-username').value;
+      const password = document.getElementById('register-password').value;
+      console.log('Registering user:', username);
+
+      // Şifre doğrulama
+      if (password.length < 8) {
+        alert('Şifre en az 8 karakter uzunluğunda olmalıdır');
+        return;
+      }
+      if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+        alert('Şifre en az bir özel karakter (!@#$%^&* vb.) içermelidir');
+        return;
+      }
+
+      try {
+        const res = await fetch('https://localhost:3000/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        console.log('Register response:', { status: res.status, headers: Object.fromEntries(res.headers) });
+        const data = await res.json();
+        console.log('Register data:', data);
+        if (res.ok) {
+          alert('Kullanıcı başarıyla kaydedildi! Lütfen giriş yapın.');
+          document.getElementById('register-form').reset();
+        } else {
+          alert(data.message || 'Kullanıcı kaydı sırasında hata oluştu');
+        }
+      } catch (err) {
+        console.error('Fetch error:', err);
+        alert('Kullanıcı kaydı sırasında hata: ' + err.message);
+      }
+    });
+
+    // Giriş Formu
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+      console.log('Logging in user:', username);
+      try {
+        const res = await fetch('https://localhost:3000/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        console.log('Login response:', { status: res.status, headers: Object.fromEntries(res.headers) });
+        const data = await res.json();
+        console.log('Login data:', data);
+        if (res.ok) {
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('userId', data.userId);
+          window.location.href = 'chat.html';
+        } else {
+          alert(data.message || 'Giriş sırasında hata oluştu');
+        }
+      } catch (err) {
+        console.error('Fetch error:', err);
+        alert('Giriş sırasında hata: ' + err.message);
+      }
+    });
+  </script>
+</body>
+</html>

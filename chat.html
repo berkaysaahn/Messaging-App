@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mesajlaşma Uygulaması - Sohbet</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body class="min-h-screen bg-gray-100 flex">
+  <!-- Yan Çubuk -->
+  <div class="w-1/4 bg-white p-4 shadow-md">
+    <h2 class="text-xl font-bold mb-4">Mesajlaşma Uygulaması</h2>
+    <div id="session-info" class="mb-4 text-sm text-gray-600">
+      Oturum şu kadar sonra sona erecek: <span id="session-timer">Hesaplanıyor...</span>
+    </div>
+    <input
+      id="search-user"
+      type="text"
+      class="w-full p-2 border rounded mb-4"
+      placeholder="Kullanıcı ara..."
+    />
+    <div id="user-list" class="mb-4"></div>
+    <h3 class="text-lg font-semibold mb-2">Arkadaşlar</h3>
+    <div id="friend-list"></div>
+    <h3 class="text-lg font-semibold mb-2">Arkadaşlık İstekleri</h3>
+    <div id="friend-requests"></div>
+    <button
+      id="logout-btn"
+      class="w-full bg-red-500 text-white p-2 rounded hover:bg-red-600 mt-4"
+    >
+      Çıkış Yap
+    </button>
+  </div>
+
+  <!-- Sohbet Alanı -->
+  <div class="w-3/4 p-4">
+    <h2 id="chat-title" class="text-xl font-bold mb-4">Bir sohbet seçin</h2>
+    <div id="message-list" class="bg-white p-4 h-96 overflow-y-auto mb-4 rounded shadow"></div>
+    <form id="message-form" class="flex">
+      <input
+        id="message-input"
+        type="text"
+        class="flex-grow p-2 border rounded-l"
+        placeholder="Mesaj yaz..."
+      />
+      <button
+        type="submit"
+        class="bg-blue-500 text-white p-2 rounded-r hover:bg-blue-600"
+      >
+        Gönder
+      </button>
+    </form>
+  </div>
+
+  <!-- Hareketsizlik Geri Sayım Modal -->
+  <div id="inactivity-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+    <div class="bg-white p-6 rounded shadow-md text-center">
+      <h3 class="text-lg font-semibold mb-4">Oturum Zaman Aşımı Uyarısı</h3>
+      <p>Oturumunuz hareketsizlik nedeniyle <span id="inactivity-timer">60</span> saniye içinde sona erecek.</p>
+      <p>Farenizi hareket ettirin veya bir tuşa basın.</p>
+      <button
+        id="stay-logged-in"
+        class="mt-4 bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+      >
+        Oturumu Açık Tut
+      </button>
+    </div>
+  </div>
+
+  <!-- Gelen Çağrı Modal -->
+  <div id="incoming-call-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+    <div class="bg-white p-6 rounded shadow-md text-center">
+      <h3 class="text-lg font-semibold mb-4">Gelen Çağrı</h3>
+      <p><span id="caller-name">Bilinmeyen</span> kullanıcısından çağrı</p>
+      <div class="mt-4">
+        <button
+          id="accept-call-btn"
+          class="bg-green-500 text-white p-2 rounded hover:bg-green-600 mr-2"
+        >
+          Kabul Et
+        </button>
+        <button
+          id="reject-call-btn"
+          class="bg-red-500 text-white p-2 rounded hover:bg-red-600"
+        >
+          Reddet
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aktif Çağrı Kontrol Paneli -->
+  <div id="call-control-panel" class="hidden fixed bottom-4 right-4 bg-white p-4 rounded shadow-md">
+    <p><span id="call-partner-name">Bilinmeyen</span> ile çağrı</p>
+    <button
+      id="end-call-btn"
+      class="bg-red-500 text-white p-2 rounded hover:bg-red-600 mt-2"
+    >
+      Çağrıyı Sonlandır
+    </button>
+  </div>
+
+  <script>
+    const socket = io('https://localhost:3000');
+    const token = localStorage.getItem('token');
+    const userId = localStorage.getItem('userId');
+    const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 dakika
+    const INACTIVITY_WARNING = 60 * 1000; // Son 1 dakika uyarı
+    let lastActivity = Date.now();
+    let inactivityInterval;
+    let sessionInterval;
+    let peerConnection;
+    let localStream;
+    let currentCallPartnerId;
+    let unreadMessages = new Map();
+
+    const configuration = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    if (!token || !userId) {
+      alert('Lütfen önce giriş yapın');
+      window.location.href = 'index.html';
+    }
+
+    function parseJwt(token) {
+      try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        return JSON.parse(jsonPayload);
+      } catch (e) {
+        console.error('Error parsing JWT:', e);
+        return null;
+      }
+    }
+
+    function updateSessionTimer() {
+      const decoded = parseJwt(token);
+      if (!decoded || !decoded.exp) {
+        document.getElementById('session-timer').textContent = 'Geçersiz token';
+        logout();
+        return;
+      }
+      const expiresAt = decoded.exp * 1000;
+      const timeLeft = expiresAt - Date.now();
+      if (timeLeft <= 0) {
+        document.getElementById('session-timer').textContent = 'Süresi Doldu';
+        logout();
+        return;
+      }
+      const minutes = Math.floor(timeLeft / 60000);
+      const seconds = Math.floor((timeLeft % 60000) / 1000);
+      document.getElementById('session-timer').textContent = `${minutes}d ${seconds}s`;
+    }
+
+    function updateInactivityTimer() {
+      const timeSinceLastActivity = Date.now() - lastActivity;
+      if (timeSinceLastActivity > INACTIVITY_TIMEOUT) {
+        logout();
+        return;
+      }
+      if (timeSinceLastActivity > (INACTIVITY_TIMEOUT - INACTIVITY_WARNING)) {
+        const modal = document.getElementById('inactivity-modal');
+        modal.classList.remove('hidden');
+        const timeLeft = Math.floor((INACTIVITY_TIMEOUT - timeSinceLastActivity) / 1000);
+        document.getElementById('inactivity-timer').textContent = timeLeft;
+      } else {
+        document.getElementById('inactivity-modal').classList.add('hidden');
+      }
+    }
+
+    function resetActivityTimer() {
+      lastActivity = Date.now();
+      document.getElementById('inactivity-modal').classList.add('hidden');
+    }
+
+    ['mousemove', 'keydown', 'click'].forEach(event => {
+      document.addEventListener(event, resetActivityTimer);
+    });
+
+    document.getElementById('stay-logged-in').addEventListener('click', resetActivityTimer);
+
+    function logout() {
+      localStorage.removeItem('token');
+      localStorage.removeItem('userId');
+      socket.disconnect();
+      clearInterval(inactivityInterval);
+      clearInterval(sessionInterval);
+      cleanupCall();
+      alert('Oturum sona erdi');
+      window.location.href = 'index.html';
+    }
+
+    async function verifyToken() {
+      try {
+        const res = await fetch('https://localhost:3000/api/verify-token', {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || 'Geçersiz token');
+        }
+      } catch (err) {
+        logout();
+      }
+    }
+
+    sessionInterval = setInterval(updateSessionTimer, 1000);
+    inactivityInterval = setInterval(updateInactivityTimer, 1000);
+    updateSessionTimer();
+    verifyToken();
+
+    function createPeerConnection() {
+      peerConnection = new RTCPeerConnection(configuration);
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('ice_candidate', { recipientId: currentCallPartnerId, candidate: event.candidate });
+        }
+      };
+      peerConnection.ontrack = (event) => {
+        const remoteAudio = new Audio();
+        remoteAudio.srcObject = event.streams[0];
+        remoteAudio.play();
+      };
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+    }
+
+    function cleanupCall() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      document.getElementById('call-control-panel').classList.add('hidden');
+      document.getElementById('incoming-call-modal').classList.add('hidden');
+      currentCallPartnerId = null;
+    }
+
+    async function startCall(recipientId, username) {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        currentCallPartnerId = recipientId;
+        document.getElementById('call-partner-name').textContent = username;
+        document.getElementById('call-control-panel').classList.remove('hidden');
+        createPeerConnection();
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('call_user', { recipientId });
+        socket.emit('offer', { recipientId, offer });
+      } catch (err) {
+        alert('Çağrı başlatılamadı: ' + err.message);
+        cleanupCall();
+      }
+    }
+
+    function updateMessages(msg) {
+      const currentChatId = document.getElementById('chat-title').textContent.includes('Grup')
+        ? 'group'
+        : document.getElementById('chat-title').dataset.recipientId;
+      const isGroup = msg.recipient_id === null;
+      const chatId = isGroup ? 'group' : (msg.sender_id === userId ? msg.recipient_id : msg.sender_id);
+
+      if (currentChatId === chatId) {
+        document.getElementById('message-list').innerHTML += `
+          <div class="p-2 ${msg.sender_id === userId ? 'text-right' : 'text-left'}">
+            <span class="inline-block bg-${msg.sender_id === userId ? 'blue' : 'gray'}-100 p-2 rounded">
+              ${msg.content}
+            </span>
+          </div>
+        `;
+        const messageList = document.getElementById('message-list');
+        messageList.scrollTop = messageList.scrollHeight;
+      } else {
+        const count = unreadMessages.get(chatId) || 0;
+        unreadMessages.set(chatId, count + 1);
+        updateFriendListNotifications();
+      }
+    }
+
+    function updateFriendListNotifications() {
+      const friendItems = document.querySelectorAll('#friend-list .friend-item');
+      friendItems.forEach(item => {
+        const friendId = item.dataset.friendId;
+        const count = unreadMessages.get(friendId) || 0;
+        const notification = item.querySelector('.notification');
+        if (count > 0) {
+          if (!notification) {
+            const span = document.createElement('span');
+            span.className = 'notification bg-red-500 text-white text-xs rounded-full px-2 ml-2';
+            span.textContent = count;
+            item.querySelector('.friend-name').appendChild(span);
+          } else {
+            notification.textContent = count;
+          }
+        } else if (notification) {
+          notification.remove();
+        }
+      });
+      const groupItem = document.querySelector('#friend-list .group-item');
+      const groupCount = unreadMessages.get('group') || 0;
+      const groupNotification = groupItem.querySelector('.notification');
+      if (groupCount > 0) {
+        if (!groupNotification) {
+          const span = document.createElement('span');
+          span.className = 'notification bg-red-500 text-white text-xs rounded-full px-2 ml-2';
+          span.textContent = groupCount;
+          groupItem.querySelector('.friend-name').appendChild(span);
+        } else {
+          groupNotification.textContent = groupCount;
+        }
+      } else if (groupNotification) {
+        groupNotification.remove();
+      }
+    }
+
+    socket.on('connect', () => {
+      socket.emit('authenticate', token);
+    });
+
+    socket.on('error', ({ message }) => {
+      alert(message);
+    });
+
+    socket.on('incoming_call', async ({ callerId }) => {
+      try {
+        const res = await fetch(`https://localhost:3000/api/users/${callerId}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const user = await res.json();
+        const callerName = user.username || 'Bilinmeyen';
+        currentCallPartnerId = callerId;
+        document.getElementById('caller-name').textContent = callerName;
+        document.getElementById('incoming-call-modal').classList.remove('hidden');
+      } catch (err) {
+        console.error('Error fetching caller info:', err);
+      }
+    });
+
+    socket.on('offer', async ({ callerId, offer }) => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        createPeerConnection();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('answer', { callerId, answer });
+      } catch (err) {
+        console.error('Error handling offer:', err);
+        cleanupCall();
+      }
+    });
+
+    socket.on('answer', ({ answer }) => {
+      peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on('ice_candidate', ({ candidate }) => {
+      peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    socket.on('call_accepted', ({ calleeId }) => {
+      document.getElementById('call-control-panel').classList.remove('hidden');
+    });
+
+    socket.on('call_rejected', () => {
+      alert('Çağrı reddedildi');
+      cleanupCall();
+    });
+
+    socket.on('call_ended', () => {
+      cleanupCall();
+    });
+
+    document.getElementById('accept-call-btn').addEventListener('click', () => {
+      socket.emit('accept_call', { callerId: currentCallPartnerId });
+      document.getElementById('incoming-call-modal').classList.add('hidden');
+      document.getElementById('call-control-panel').classList.remove('hidden');
+    });
+
+    document.getElementById('reject-call-btn').addEventListener('click', () => {
+      socket.emit('reject_call', { callerId: currentCallPartnerId });
+      cleanupCall();
+    });
+
+    document.getElementById('end-call-btn').addEventListener('click', () => {
+      socket.emit('end_call', { recipientId: currentCallPartnerId });
+      cleanupCall();
+    });
+
+    document.getElementById('search-user').addEventListener('input', async (e) => {
+      const query = e.target.value.trim();
+      console.log(`Searching for user: ${query}`);
+      if (query.length < 2) {
+        document.getElementById('user-list').innerHTML = '';
+        console.log('Query too short, clearing user list');
+        return;
+      }
+      try {
+        const res = await fetch(`https://localhost:3000/api/users/search/${encodeURIComponent(query)}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        console.log('Search response:', { status: res.status, headers: Object.fromEntries(res.headers) });
+        if (!res.ok) {
+          const error = await res.json();
+          console.error('Search error:', error);
+          document.getElementById('user-list').innerHTML = '<p class="p-2 text-red-500">Arama sırasında hata oluştu.</p>';
+          return;
+        }
+        const users = await res.json();
+        console.log('Search results:', users);
+        if (users.length === 0) {
+          document.getElementById('user-list').innerHTML = '<p class="p-2 text-gray-500">Kullanıcı bulunamadı.</p>';
+        } else {
+          document.getElementById('user-list').innerHTML = users.map(user => `
+            <div class="flex justify-between p-2 border-b">
+              <span>${user.username}</span>
+              <button onclick="sendFriendRequest('${user.id}')" class="text-blue-500">Ekle</button>
+            </div>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Search fetch error:', err);
+        document.getElementById('user-list').innerHTML = '<p class="p-2 text-red-500">Sunucuya bağlanılamadı.</p>';
+      }
+    });
+
+    async function sendFriendRequest(recipientId) {
+      try {
+        const res = await fetch('https://localhost:3000/api/friends/request', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ recipientId }),
+        });
+        const data = await res.json();
+        console.log('Friend request response:', data);
+        alert(data.message);
+      } catch (err) {
+        console.error('Friend request error:', err);
+        alert('Arkadaşlık isteği gönderilemedi.');
+      }
+    }
+
+    async function loadFriends() {
+      try {
+        const res = await fetch('https://localhost:3000/api/friends', {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const friends = await res.json();
+        document.getElementById('friend-list').innerHTML = `
+          <div class="p-2 border-b group-item cursor-pointer" data-friend-id="group" onclick="loadMessages('group')">
+            <span class="friend-name">Grup Sohbeti</span>
+          </div>
+          ${friends.map(friend => `
+            <div class="p-2 border-b friend-item cursor-pointer" data-friend-id="${friend.id}">
+              <span class="friend-name" onclick="loadMessages('${friend.id}')">${friend.username}</span>
+              <button onclick="startCall('${friend.id}', '${friend.username}')" class="text-green-500">Ara</button>
+            </div>
+          `).join('')}
+        `;
+        updateFriendListNotifications();
+      } catch (err) {
+        console.error('Load friends error:', err);
+      }
+    }
+
+    async function loadFriendRequests() {
+      try {
+        const res = await fetch('https://localhost:3000/api/friend_requests', {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const requests = await res.json();
+        document.getElementById('friend-requests').innerHTML = requests.map(req => `
+          <div class="flex justify-between p-2 border-b">
+            <span>${req.username}</span>
+            <div>
+              <button onclick="acceptFriendRequest('${req.id}')" class="text-green-500 mr-2">Kabul Et</button>
+              <button onclick="rejectFriendRequest('${req.id}')" class="text-red-500">Reddet</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Load friend requests error:', err);
+      }
+    }
+
+    async function acceptFriendRequest(requestId) {
+      try {
+        const res = await fetch('https://localhost:3000/api/friends/accept', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ requestId }),
+        });
+        const data = await res.json();
+        alert(data.message);
+        loadFriends();
+        loadFriendRequests();
+      } catch (err) {
+        console.error('Accept friend request error:', err);
+      }
+    }
+
+    async function rejectFriendRequest(requestId) {
+      try {
+        const res = await fetch('https://localhost:3000/api/friends/reject', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ requestId }),
+        });
+        const data = await res.json();
+        alert(data.message);
+        loadFriendRequests();
+      } catch (err) {
+        console.error('Reject friend request error:', err);
+      }
+    }
+
+    async function loadMessages(userId) {
+      try {
+        // Kullanıcı adını al
+        let username = 'Bilinmeyen';
+        if (userId !== 'group') {
+          const res = await fetch(`https://localhost:3000/api/users/${userId}`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const user = await res.json();
+            username = user.username || userId;
+          } else {
+            console.error('Error fetching username:', await res.json());
+          }
+        }
+
+        // Başlığı güncelle
+        document.getElementById('chat-title').textContent = userId === 'group' ? 'Grup Sohbeti' : `${username} ile Sohbet`;
+        document.getElementById('chat-title').dataset.recipientId = userId;
+
+        // Mesajları yükle
+        const res = await fetch(`https://localhost:3000/api/messages/${userId}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        const messages = await res.json();
+        document.getElementById('message-list').innerHTML = messages.map(msg => `
+          <div class="p-2 ${msg.sender_id === localStorage.getItem('userId') ? 'text-right' : 'text-left'}">
+            <span class="inline-block bg-${msg.sender_id === localStorage.getItem('userId') ? 'blue' : 'gray'}-100 p-2 rounded">
+              ${msg.content}
+            </span>
+          </div>
+        `).join('');
+        const messageList = document.getElementById('message-list');
+        messageList.scrollTop = messageList.scrollHeight;
+        unreadMessages.delete(userId);
+        updateFriendListNotifications();
+      } catch (err) {
+        console.error('Load messages error:', err);
+      }
+    }
+
+    document.getElementById('message-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const content = document.getElementById('message-input').value;
+      const recipientId = document.getElementById('chat-title').textContent.includes('Grup') ? 'group' : document.getElementById('chat-title').dataset.recipientId;
+      if (!content) return;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (recipientId !== 'group' && !uuidRegex.test(recipientId)) {
+        alert('Geçersiz alıcı kimliği. Lütfen bir arkadaş seçin.');
+        return;
+      }
+      socket.emit(recipientId === 'group' ? 'group_message' : 'private_message', { recipientId, content });
+      document.getElementById('message-input').value = '';
+    });
+
+    socket.on('private_message', updateMessages);
+    socket.on('group_message', updateMessages);
+    socket.on('friend_request', loadFriendRequests);
+    socket.on('friend_request_accepted', () => {
+      loadFriends();
+      loadFriendRequests();
+    });
+    socket.on('friend_request_rejected', loadFriendRequests);
+
+    document.getElementById('logout-btn').addEventListener('click', logout);
+
+    loadFriends();
+    loadFriendRequests();
+  </script>
+</body>
+</html>
