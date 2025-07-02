@@ -54,7 +54,8 @@ npm install
 
    ```bash
    npm start
+   ```
 
    ```bash
    npx http-server -p 5000 --ssl --cert ./certs/localhost.crt --key ./certs/localhost.key 
-
+   ```
