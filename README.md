@@ -54,5 +54,8 @@ npm install
 
    ```bash
    npm start
-   #Open the file from a different terminal and type the following and run it
+
+- Open the file from a different terminal and type the following and run it
+
+   ```bash
    npx http-server -p 5000 --ssl --cert ./certs/localhost.crt --key ./certs/localhost.key 
